@@ -1,4 +1,6 @@
-export default function Home() {
+import { define } from "../utils.ts";
+
+export default define.page(function Home() {
   return (
     <main
       style={{
@@ -11,7 +13,7 @@ export default function Home() {
       <h1>HVAC Lead Finder</h1>
 
       <p>
-        Search Google Maps through SerpApi and save new businesses to Deno KV.
+        Search Google Maps through SerpApi and collect HVAC businesses.
       </p>
 
       <p>Try:</p>
@@ -19,4 +21,4 @@ export default function Home() {
       <code>/search?city=Houston&state=TX</code>
     </main>
   );
-}
+});
