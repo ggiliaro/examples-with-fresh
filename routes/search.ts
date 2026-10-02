@@ -50,23 +50,26 @@ export const handler = define.handlers({
       );
     }
 
+    const searchQuery =
+      `${query} in ${city}${state ? `, ${state}` : ""}`;
+
     const serpUrl = new URL("https://serpapi.com/search.json");
 
     serpUrl.searchParams.set("engine", "google_maps");
-    serpUrl.searchParams.set("q", query);
-    serpUrl.searchParams.set(
-      "location",
-      `${city}${state ? `, ${state}` : ""}`,
-    );
+    serpUrl.searchParams.set("type", "search");
+    serpUrl.searchParams.set("q", searchQuery);
     serpUrl.searchParams.set("api_key", apiKey);
 
     const response = await fetch(serpUrl);
 
     if (!response.ok) {
+      const errorBody = await response.text();
+
       return Response.json(
         {
           error: "SerpApi request failed",
           status: response.status,
+          details: errorBody,
         },
         { status: 502 },
       );
@@ -106,6 +109,7 @@ export const handler = define.handlers({
       city,
       state: state || null,
       query,
+      searchQuery,
       found: leads.length,
       leads,
     });
