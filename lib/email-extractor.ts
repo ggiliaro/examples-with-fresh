@@ -1,130 +1,76 @@
 const EMAIL_REGEX =
   /[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9-]+(?:\.[a-zA-Z0-9-]+)+/g;
 
-const PAGE_LIMIT = 3;
+const MAX_CONTACT_PAGES = 3;
 
-function extractEmails(html: string): string[] {
-  const matches = html.match(EMAIL_REGEX) ?? [];
+const BLOCKED_EMAILS = new Set([
+  "user@domain.com",
+  "info@mysite.com",
+  "example@mysite.com",
+]);
 
-  return [...new Set(
-    matches
-      .map((email) => email.toLowerCase())
-      .filter((email) =>
-        !email.endsWith(".png") &&
-        !email.endsWith(".jpg") &&
-        !email.includes("example.com") &&
-        !email.includes("sentry.io")
-      ),
-  )];
-}
+const BLOCKED_DOMAINS = new Set([
+  "example.com",
+  "example.org",
+  "example.net",
+  "mysite.com",
+  "domain.com",
+  "sentry.io",
+  "sentry-next.wixpress.com",
+]);
 
-function extractUsefulLinks(
-  html: string,
-  baseUrl: string,
-): string[] {
-  const links: string[] = [];
+function isValidEmail(email: string): boolean {
+  const value = email.trim().toLowerCase();
 
-  const regex = /href=["']([^"']+)["']/gi;
+  if (value.length > 254) return false;
 
-  for (const match of html.matchAll(regex)) {
-    const href = match[1];
+  if (BLOCKED_EMAILS.has(value)) return false;
 
-    if (!href) continue;
-
-    const lower = href.toLowerCase();
-
-    if (
-      lower.includes("contact") ||
-      lower.includes("about")
-    ) {
-      try {
-        const url = new URL(href, baseUrl);
-
-        if (url.protocol === "http:" || url.protocol === "https:") {
-          links.push(url.href);
-        }
-      } catch {
-        // Ignore malformed URLs.
-      }
-    }
+  if (
+    value.includes("/") ||
+    value.includes("\\") ||
+    value.includes("://")
+  ) {
+    return false;
   }
 
-  return [...new Set(links)].slice(0, PAGE_LIMIT);
-}
+  const atIndex = value.lastIndexOf("@");
 
-async function fetchPage(url: string): Promise<string | null> {
-  try {
-    const response = await fetch(url, {
-      headers: {
-        "User-Agent":
-          "Mozilla/5.0 (compatible; HVACLeadFinder/1.0)",
-        "Accept": "text/html,application/xhtml+xml",
-      },
-      redirect: "follow",
-      signal: AbortSignal.timeout(8000),
-    });
-
-    if (!response.ok) {
-      return null;
-    }
-
-    const contentType = response.headers.get("content-type") ?? "";
-
-    if (!contentType.includes("text/html")) {
-      return null;
-    }
-
-    return await response.text();
-  } catch {
-    return null;
-  }
-}
-
-export async function extractEmailsFromWebsite(
-  website: string,
-): Promise<string[]> {
-  let homepage: URL;
-
-  try {
-    homepage = new URL(website);
-  } catch {
-    return [];
+  if (atIndex <= 0 || atIndex === value.length - 1) {
+    return false;
   }
 
-  const emails = new Set<string>();
+  const local = value.slice(0, atIndex);
+  const domain = value.slice(atIndex + 1);
 
-  const homepageHtml = await fetchPage(homepage.href);
+  if (!local || !domain) return false;
 
-  if (!homepageHtml) {
-    return [];
+  if (local.length > 64 || domain.length > 253) {
+    return false;
   }
 
-  for (const email of extractEmails(homepageHtml)) {
-    emails.add(email);
+  if (local.includes("/") || local.includes("\\")) {
+    return false;
   }
 
-  if (emails.size > 0) {
-    return [...emails];
+  if (domain.includes("/") || domain.includes("\\")) {
+    return false;
   }
 
-  const links = extractUsefulLinks(
-    homepageHtml,
-    homepage.href,
-  );
-
-  for (const link of links) {
-    const html = await fetchPage(link);
-
-    if (!html) continue;
-
-    for (const email of extractEmails(html)) {
-      emails.add(email);
-    }
-
-    if (emails.size >= 5) {
-      break;
-    }
+  if (BLOCKED_DOMAINS.has(domain)) {
+    return false;
   }
 
-  return [...emails];
-}
+  if (!domain.includes(".")) {
+    return false;
+  }
+
+  if (domain.startsWith(".") || domain.endsWith(".")) {
+    return false;
+  }
+
+  if (domain.includes("..")) {
+    return false;
+  }
+
+  // Reject things such as foo
