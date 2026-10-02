@@ -16,15 +16,8 @@ interface SerpApiResult {
     };
   }>;
 
-  search_metadata?: {
-    id?: string;
-    status?: string;
-  };
-
   error?: string;
 }
-
-const kv = await Deno.openKv();
 
 export async function GET(req: Request): Promise<Response> {
   const url = new URL(req.url);
@@ -89,25 +82,11 @@ export async function GET(req: Request): Promise<Response> {
     }
 
     const results = data.local_results ?? [];
-    const leads = [];
 
-    for (const result of results) {
-      const placeId = result.place_id;
-
-      if (!placeId) {
-        continue;
-      }
-
-      const key = ["lead", placeId];
-
-      const existing = await kv.get(key);
-
-      if (existing.value) {
-        continue;
-      }
-
-      const lead = {
-        placeId,
+    const leads = results
+      .filter((result) => result.place_id)
+      .map((result) => ({
+        placeId: result.place_id,
         name: result.title ?? null,
         type: result.type ?? null,
         website: result.website ?? null,
@@ -120,22 +99,14 @@ export async function GET(req: Request): Promise<Response> {
         thumbnail: result.thumbnail ?? null,
         coordinates: result.gps_coordinates ?? null,
         source: "google_maps",
-        query,
-        createdAt: new Date().toISOString(),
-      };
-
-      await kv.set(key, lead);
-
-      leads.push(lead);
-    }
+      }));
 
     return Response.json({
       success: true,
       city,
       state: state || null,
       query,
-      found: results.length,
-      newLeads: leads.length,
+      found: leads.length,
       leads,
     });
   } catch (error) {
@@ -143,7 +114,7 @@ export async function GET(req: Request): Promise<Response> {
 
     return Response.json(
       {
-        error: "Unexpected error while searching",
+        error: "Unexpected error while contacting SerpApi",
       },
       { status: 500 },
     );
