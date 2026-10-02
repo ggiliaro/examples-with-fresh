@@ -1,4 +1,10 @@
 import { define } from "../utils.ts";
+import { extractEmailsFromWebsite } from "../lib/email-extractor.ts";
+import {
+  getLead,
+  saveLead,
+  type Lead,
+} from "../lib/kv.ts";
 
 interface SerpApiResult {
   local_results?: Array<{
@@ -53,7 +59,9 @@ export const handler = define.handlers({
     const searchQuery =
       `${query} in ${city}${state ? `, ${state}` : ""}`;
 
-    const serpUrl = new URL("https://serpapi.com/search.json");
+    const serpUrl = new URL(
+      "https://serpapi.com/search.json",
+    );
 
     serpUrl.searchParams.set("engine", "google_maps");
     serpUrl.searchParams.set("type", "search");
@@ -86,13 +94,36 @@ export const handler = define.handlers({
       );
     }
 
-    const leads = (data.local_results ?? [])
-      .filter((result) => result.place_id)
-      .map((result) => ({
+    const results = data.local_results ?? [];
+
+    const leads: Lead[] = [];
+
+    for (const result of results) {
+      if (!result.place_id) continue;
+
+      const existing = await getLead(result.place_id);
+
+      if (existing) {
+        leads.push(existing);
+        continue;
+      }
+
+      let emails: string[] = [];
+
+      if (result.website) {
+        emails = await extractEmailsFromWebsite(
+          result.website,
+        );
+      }
+
+      const now = new Date().toISOString();
+
+      const lead: Lead = {
         placeId: result.place_id,
         name: result.title ?? null,
         type: result.type ?? null,
         website: result.website ?? null,
+        emails,
         phone: result.phone ?? null,
         address: result.address ?? null,
         city,
@@ -102,7 +133,15 @@ export const handler = define.handlers({
         thumbnail: result.thumbnail ?? null,
         coordinates: result.gps_coordinates ?? null,
         source: "google_maps",
-      }));
+        enriched: true,
+        createdAt: now,
+        updatedAt: now,
+      };
+
+      await saveLead(lead);
+
+      leads.push(lead);
+    }
 
     return Response.json({
       success: true,
@@ -111,6 +150,9 @@ export const handler = define.handlers({
       query,
       searchQuery,
       found: leads.length,
+      withEmail: leads.filter(
+        (lead) => lead.emails.length > 0,
+      ).length,
       leads,
     });
   },
