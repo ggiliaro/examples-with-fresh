@@ -1,4 +1,4 @@
-import { type Handlers } from "@fresh/core";
+import { define } from "../utils.ts";
 
 interface SerpApiResult {
   local_results?: Array<{
@@ -20,7 +20,7 @@ interface SerpApiResult {
   error?: string;
 }
 
-export const handler: Handlers = {
+export const handler = define.handlers({
   async GET(req) {
     const url = new URL(req.url);
 
@@ -60,65 +60,54 @@ export const handler: Handlers = {
     );
     serpUrl.searchParams.set("api_key", apiKey);
 
-    try {
-      const response = await fetch(serpUrl);
+    const response = await fetch(serpUrl);
 
-      if (!response.ok) {
-        return Response.json(
-          {
-            error: "SerpApi request failed",
-            status: response.status,
-          },
-          { status: 502 },
-        );
-      }
-
-      const data = (await response.json()) as SerpApiResult;
-
-      if (data.error) {
-        return Response.json(
-          {
-            error: data.error,
-          },
-          { status: 502 },
-        );
-      }
-
-      const leads = (data.local_results ?? [])
-        .filter((result) => result.place_id)
-        .map((result) => ({
-          placeId: result.place_id,
-          name: result.title ?? null,
-          type: result.type ?? null,
-          website: result.website ?? null,
-          phone: result.phone ?? null,
-          address: result.address ?? null,
-          city,
-          state: state || null,
-          rating: result.rating ?? null,
-          reviews: result.reviews ?? null,
-          thumbnail: result.thumbnail ?? null,
-          coordinates: result.gps_coordinates ?? null,
-          source: "google_maps",
-        }));
-
-      return Response.json({
-        success: true,
-        city,
-        state: state || null,
-        query,
-        found: leads.length,
-        leads,
-      });
-    } catch (error) {
-      console.error(error);
-
+    if (!response.ok) {
       return Response.json(
         {
-          error: "Unexpected error while contacting SerpApi",
+          error: "SerpApi request failed",
+          status: response.status,
         },
-        { status: 500 },
+        { status: 502 },
       );
     }
+
+    const data = (await response.json()) as SerpApiResult;
+
+    if (data.error) {
+      return Response.json(
+        {
+          error: data.error,
+        },
+        { status: 502 },
+      );
+    }
+
+    const leads = (data.local_results ?? [])
+      .filter((result) => result.place_id)
+      .map((result) => ({
+        placeId: result.place_id,
+        name: result.title ?? null,
+        type: result.type ?? null,
+        website: result.website ?? null,
+        phone: result.phone ?? null,
+        address: result.address ?? null,
+        city,
+        state: state || null,
+        rating: result.rating ?? null,
+        reviews: result.reviews ?? null,
+        thumbnail: result.thumbnail ?? null,
+        coordinates: result.gps_coordinates ?? null,
+        source: "google_maps",
+      }));
+
+    return Response.json({
+      success: true,
+      city,
+      state: state || null,
+      query,
+      found: leads.length,
+      leads,
+    });
   },
-};
+});
