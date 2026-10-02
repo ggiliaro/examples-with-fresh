@@ -1,5 +1,7 @@
 import { define } from "../utils.ts";
-import { extractEmailsFromWebsite } from "../lib/email-extractor.ts";
+import {
+  extractEmailsFromWebsite,
+} from "../lib/email-extractor.ts";
 import {
   getLead,
   saveLead,
@@ -26,248 +28,339 @@ interface SerpApiResult {
   error?: string;
 }
 
-function hasUsableEmails(emails: string[]): boolean {
-  return emails.length > 0;
+function cleanEmails(
+  emails: string[],
+): string[] {
+  return [
+    ...new Set(
+      emails.filter(
+        (email) =>
+          typeof email === "string" &&
+          email.includes("@") &&
+          !email.includes("/") &&
+          !email.includes("\\") &&
+          !email.includes("://"),
+      ),
+    ),
+  ];
 }
 
-export const handler = define.handlers({
-  async GET(req) {
-    const url = new URL(req.url);
+export const handler =
+  define.handlers({
+    async GET(req) {
+      const url =
+        new URL(req.url);
 
-    const city = url.searchParams.get("city")?.trim();
-    const state = url.searchParams.get("state")?.trim() ?? "";
-    const query =
-      url.searchParams.get("q")?.trim() ||
-      "HVAC contractors";
+      const city =
+        url.searchParams
+          .get("city")
+          ?.trim();
 
-    if (!city) {
-      return Response.json(
-        {
-          error: "Missing city",
-          example:
-            "/search?city=Houston&state=TX",
-        },
-        { status: 400 },
-      );
-    }
+      const state =
+        url.searchParams
+          .get("state")
+          ?.trim() ?? "";
 
-    const apiKey = Deno.env.get("SERPAPI_KEY");
+      const query =
+        url.searchParams
+          .get("q")
+          ?.trim() ||
+        "HVAC contractors";
 
-    if (!apiKey) {
-      return Response.json(
-        {
-          error: "SERPAPI_KEY is not configured",
-        },
-        { status: 500 },
-      );
-    }
-
-    const searchQuery =
-      `${query} in ${city}${state ? `, ${state}` : ""}`;
-
-    const serpUrl = new URL(
-      "https://serpapi.com/search.json",
-    );
-
-    serpUrl.searchParams.set(
-      "engine",
-      "google_maps",
-    );
-
-    serpUrl.searchParams.set(
-      "type",
-      "search",
-    );
-
-    serpUrl.searchParams.set(
-      "q",
-      searchQuery,
-    );
-
-    serpUrl.searchParams.set(
-      "api_key",
-      apiKey,
-    );
-
-    const response = await fetch(serpUrl);
-
-    if (!response.ok) {
-      const errorBody = await response.text();
-
-      return Response.json(
-        {
-          error: "SerpApi request failed",
-          status: response.status,
-          details: errorBody,
-        },
-        { status: 502 },
-      );
-    }
-
-    const data =
-      (await response.json()) as SerpApiResult;
-
-    if (data.error) {
-      return Response.json(
-        {
-          error: data.error,
-        },
-        { status: 502 },
-      );
-    }
-
-    const results = data.local_results ?? [];
-
-    const leads: Lead[] = [];
-
-    let newLeads = 0;
-    let existingLeads = 0;
-    let enrichedLeads = 0;
-
-    for (const result of results) {
-      if (!result.place_id) {
-        continue;
+      if (!city) {
+        return Response.json(
+          {
+            error: "Missing city",
+            example:
+              "/search?city=Houston&state=TX",
+          },
+          { status: 400 },
+        );
       }
 
-      const existing =
-        await getLead(result.place_id);
+      const apiKey =
+        Deno.env.get(
+          "SERPAPI_KEY",
+        );
 
-      /*
-       * If the lead already has a usable email,
-       * don't crawl the website again.
-       */
-      if (
-        existing &&
-        hasUsableEmails(existing.emails)
+      if (!apiKey) {
+        return Response.json(
+          {
+            error:
+              "SERPAPI_KEY is not configured",
+          },
+          { status: 500 },
+        );
+      }
+
+      const searchQuery =
+        `${query} in ${city}${
+          state ? `, ${state}` : ""
+        }`;
+
+      const serpUrl =
+        new URL(
+          "https://serpapi.com/search.json",
+        );
+
+      serpUrl.searchParams.set(
+        "engine",
+        "google_maps",
+      );
+
+      serpUrl.searchParams.set(
+        "type",
+        "search",
+      );
+
+      serpUrl.searchParams.set(
+        "q",
+        searchQuery,
+      );
+
+      serpUrl.searchParams.set(
+        "api_key",
+        apiKey,
+      );
+
+      const response =
+        await fetch(serpUrl);
+
+      if (!response.ok) {
+        const errorBody =
+          await response.text();
+
+        return Response.json(
+          {
+            error:
+              "SerpApi request failed",
+            status:
+              response.status,
+            details:
+              errorBody,
+          },
+          { status: 502 },
+        );
+      }
+
+      const data =
+        (await response.json()) as
+          SerpApiResult;
+
+      if (data.error) {
+        return Response.json(
+          {
+            error: data.error,
+          },
+          { status: 502 },
+        );
+      }
+
+      const results =
+        data.local_results ?? [];
+
+      const leads: Lead[] = [];
+
+      let newLeads = 0;
+      let existingLeads = 0;
+      let reEnriched = 0;
+
+      for (
+        const result of results
       ) {
-        leads.push(existing);
-        existingLeads++;
-        continue;
-      }
+        if (!result.place_id) {
+          continue;
+        }
 
-      /*
-       * Either this is a new lead or an existing
-       * lead that previously had no usable email.
-       */
-      let emails: string[] = [];
-
-      if (result.website) {
-        emails =
-          await extractEmailsFromWebsite(
-            result.website,
+        const existing =
+          await getLead(
+            result.place_id,
           );
+
+        /*
+         * Clean emails already stored
+         * in KV.
+         *
+         * This removes garbage from
+         * previous versions of the
+         * extractor.
+         */
+        const existingEmails =
+          cleanEmails(
+            existing?.emails ?? [],
+          );
+
+        /*
+         * If an existing lead already has
+         * an email, save the cleaned version
+         * and don't crawl again.
+         */
+        if (
+          existing &&
+          existingEmails.length > 0
+        ) {
+          const cleanedLead: Lead = {
+            ...existing,
+            emails:
+              existingEmails,
+            updatedAt:
+              existing.updatedAt,
+          };
+
+          /*
+           * Only write if something was
+           * actually removed.
+           */
+          if (
+            existingEmails.length !==
+            existing.emails.length
+          ) {
+            await saveLead(
+              cleanedLead,
+            );
+          }
+
+          leads.push(
+            cleanedLead,
+          );
+
+          existingLeads++;
+
+          continue;
+        }
+
+        /*
+         * New lead OR existing lead with
+         * no usable email.
+         */
+        let emails: string[] = [];
+
+        if (result.website) {
+          emails =
+            await extractEmailsFromWebsite(
+              result.website,
+            );
+        }
+
+        emails =
+          cleanEmails(emails);
+
+        const now =
+          new Date().toISOString();
+
+        const lead: Lead = {
+          placeId:
+            result.place_id,
+
+          name:
+            result.title ??
+            existing?.name ??
+            null,
+
+          type:
+            result.type ??
+            existing?.type ??
+            null,
+
+          website:
+            result.website ??
+            existing?.website ??
+            null,
+
+          emails,
+
+          phone:
+            result.phone ??
+            existing?.phone ??
+            null,
+
+          address:
+            result.address ??
+            existing?.address ??
+            null,
+
+          city,
+
+          state:
+            state ||
+            existing?.state ||
+            null,
+
+          rating:
+            result.rating ??
+            existing?.rating ??
+            null,
+
+          reviews:
+            result.reviews ??
+            existing?.reviews ??
+            null,
+
+          thumbnail:
+            result.thumbnail ??
+            existing?.thumbnail ??
+            null,
+
+          coordinates:
+            result.gps_coordinates ??
+            existing?.coordinates ??
+            null,
+
+          source:
+            "google_maps",
+
+          enriched: true,
+
+          createdAt:
+            existing?.createdAt ??
+            now,
+
+          updatedAt:
+            now,
+        };
+
+        await saveLead(
+          lead,
+        );
+
+        leads.push(lead);
+
+        if (existing) {
+          reEnriched++;
+        } else {
+          newLeads++;
+        }
       }
 
-      const now =
-        new Date().toISOString();
-
-      const lead: Lead = {
-        placeId: result.place_id,
-
-        name:
-          result.title ??
-          existing?.name ??
-          null,
-
-        type:
-          result.type ??
-          existing?.type ??
-          null,
-
-        website:
-          result.website ??
-          existing?.website ??
-          null,
-
-        emails,
-
-        phone:
-          result.phone ??
-          existing?.phone ??
-          null,
-
-        address:
-          result.address ??
-          existing?.address ??
-          null,
+      return Response.json({
+        success: true,
 
         city,
 
         state:
-          state ||
-          existing?.state ||
-          null,
+          state || null,
 
-        rating:
-          result.rating ??
-          existing?.rating ??
-          null,
+        query,
 
-        reviews:
-          result.reviews ??
-          existing?.reviews ??
-          null,
+        searchQuery,
 
-        thumbnail:
-          result.thumbnail ??
-          existing?.thumbnail ??
-          null,
+        found:
+          leads.length,
 
-        coordinates:
-          result.gps_coordinates ??
-          existing?.coordinates ??
-          null,
+        withEmail:
+          leads.filter(
+            (lead) =>
+              lead.emails.length >
+              0,
+          ).length,
 
-        source: "google_maps",
+        newLeads,
 
-        enriched: true,
+        existingLeads,
 
-        createdAt:
-          existing?.createdAt ??
-          now,
+        reEnriched,
 
-        updatedAt: now,
-      };
-
-      await saveLead(lead);
-
-      leads.push(lead);
-
-      if (existing) {
-        enrichedLeads++;
-      } else {
-        newLeads++;
-      }
-    }
-
-    return Response.json({
-      success: true,
-
-      city,
-
-      state:
-        state || null,
-
-      query,
-
-      searchQuery,
-
-      found: leads.length,
-
-      withEmail:
-        leads.filter(
-          (lead) =>
-            lead.emails.length > 0,
-        ).length,
-
-      newLeads,
-
-      existingLeads,
-
-      reEnriched:
-        enrichedLeads,
-
-      leads,
-    });
-  },
-});
+        leads,
+      });
+    },
+  });
